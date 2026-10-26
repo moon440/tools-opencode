@@ -196,7 +196,7 @@ function truthy(value: string): boolean | null {
 //   hw = hit after warm pings       (warming demonstrably helped)
 //   mw = miss despite warm pings    (warming failed to protect the prefix)
 //   mu = miss without pings         (warming was off or not attempted)
-type Outcome = { k: "hu" | "hw" | "mw" | "mu"; g: number; t: number }
+type Outcome = { k: "hu" | "hw" | "mw" | "mu"; g: number; t: number; d?: string }
 
 type Economics = {
   override: "auto" | "on" | "off"
@@ -562,7 +562,9 @@ export default {
 
     // -------------------------------------------- idle-resume classification
 
-    function recordResumeOutcome(item: SessionState, cacheRead: number) {
+    function recordResumeOutcome(item: SessionState, cacheRead: number, durableID: string) {
+      if (!item.lastRealAt) return // first observed step, not a resume
+
       const gap = Date.now() - item.lastRealAt
       if (gap < IDLE_START_MS) return // normal in-task step, not an idle resume
 
@@ -575,7 +577,10 @@ export default {
       item.pingsSinceReal = 0
 
       const econ = readEconomics()
-      econ.outcomes.push({ k: kind, g: Math.round(gap / 60_000), t: Date.now() })
+      // Cross-instance dedup: the same durable step can reach several
+      // plugin instances. Never record the same step twice.
+      if (durableID && econ.outcomes.some((x) => x.d === durableID)) return
+      econ.outcomes.push({ k: kind, g: Math.round(gap / 60_000), t: Date.now(), d: durableID || undefined })
       writeEconomics(econ)
     }
 
@@ -595,7 +600,7 @@ export default {
         return
       }
 
-      recordResumeOutcome(item, cacheRead)
+      recordResumeOutcome(item, cacheRead, messageID)
 
       item.lastRealAt = Date.now()
       item.providerID = snap.providerID ?? item.providerID
