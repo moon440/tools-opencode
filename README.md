@@ -165,6 +165,18 @@ hyper/qwen3.8-27b
 Do not keep a very long stale session alive forever. Long sessions accumulate
 context and make every cached request expensive.
 
+Recommended agent variants:
+
+```text
+build:       hyper/qwen3.8-flash#medium
+plan:        hyper/qwen3.8-flash#medium
+general:     hyper/qwen3.8-flash#medium
+explore:     hyper/qwen3.8-flash#medium
+title:       hyper/qwen3.8-flash#low
+summary:     hyper/qwen3.8-flash#low
+compaction:  hyper/qwen3.8-flash#low
+```
+
 ## Measured stable price target
 
 For the tested `hyper/qwen3.8-flash #medium` setup, a stable cached session

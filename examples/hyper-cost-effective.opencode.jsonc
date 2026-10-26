@@ -4,6 +4,29 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "hyper/qwen3.8-flash",
   "default_agent": "build",
+  "agents": {
+    "build": {
+      "model": "hyper/qwen3.8-flash#medium"
+    },
+    "plan": {
+      "model": "hyper/qwen3.8-flash#medium"
+    },
+    "general": {
+      "model": "hyper/qwen3.8-flash#medium"
+    },
+    "explore": {
+      "model": "hyper/qwen3.8-flash#medium"
+    },
+    "title": {
+      "model": "hyper/qwen3.8-flash#low"
+    },
+    "summary": {
+      "model": "hyper/qwen3.8-flash#low"
+    },
+    "compaction": {
+      "model": "hyper/qwen3.8-flash#low"
+    }
+  },
   "tool_output": {
     "max_lines": 300,
     "max_bytes": 20000
