@@ -179,6 +179,13 @@ compaction:  hyper/qwen3.8-flash#low
 
 ## Measured stable price target
 
+Isolated small new session:
+
+```text
+one status-check assistant step: $0.00084
+about 0.017 Hypercredits
+```
+
 For the tested `hyper/qwen3.8-flash #medium` setup, a stable cached session
 around 300k-330k context produced:
 
@@ -203,11 +210,18 @@ produce several assistant tool-loop steps.
 The practical stable target is:
 
 ```text
-$0.005 per cached assistant request under a long audit session
+new small session step:         $0.0008-$0.0015
+normal cached work step:        $0.0025-$0.0050
+large audit session step:       $0.0045-$0.0060
+complex step with huge output:  $0.0060-$0.0100+
+cache-prefix rebuild:           context tokens * $0.15 / 1M
 ```
 
-New small sessions should be much cheaper. A large miss should happen only after
-model/MCP/config/tool-prefix changes or provider cache expiry.
+A full user task cost is:
+
+```text
+number of assistant/model steps * average step cost
+```
 
 ## More documentation
 
