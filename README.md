@@ -165,18 +165,45 @@ hyper/qwen3.8-27b
 Do not keep a very long stale session alive forever. Long sessions accumulate
 context and make every cached request expensive.
 
-## Cost policy
+## Measured stable price target
 
-Best general policy:
+For the tested `hyper/qwen3.8-flash #medium` setup, a stable cached session
+around 300k-330k context produced:
 
 ```text
-Small new session
-Stable tool prefix
-Context Mode for large data
-RTK/compressed tool output
-Caveman/terse output
-Adaptive warming
-Escalate only hard reasoning tasks
+median cached assistant request: $0.0053
+typical cached range:            $0.0045-$0.0060
+full 310k cache miss:            $0.047
+full 783k cache miss:            $0.118
+```
+
+In Hypercredits, assuming `1 credit = $0.05`:
+
+```text
+stable cached assistant request: about 0.10-0.12 credits
+310k miss:                       about 0.94 credits
+783k miss:                       about 2.36 credits
+```
+
+Do not confuse one assistant request with one user prompt. A user prompt can
+produce several assistant tool-loop steps.
+
+The practical stable target is:
+
+```text
+$0.005 per cached assistant request under a long audit session
+```
+
+New small sessions should be much cheaper. A large miss should happen only after
+model/MCP/config/tool-prefix changes or provider cache expiry.
+
+## More documentation
+
+```text
+docs/COST_MODEL.md
+docs/AUDIT-2026-10-26.md
+docs/NOVELTY.md
+docs/SECURITY.md
 ```
 
 When warming is enabled, one provider request is real usage. It should be used
