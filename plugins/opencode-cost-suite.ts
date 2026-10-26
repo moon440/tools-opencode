@@ -484,7 +484,7 @@ export default {
     function appendEventShape(type: string, properties: any): void {
       try {
         const seen = shapeSeen.get(type) ?? 0
-        if (seen >= 3 || shapeLines >= 40) return
+        if (seen >= 3 || shapeLines >= 120) return
         shapeSeen.set(type, seen + 1)
         shapeLines += 1
         ensureStateDir()
@@ -718,7 +718,7 @@ export default {
           const type = String(event?.type ?? "")
           const properties = event?.properties ?? {}
           appendEventDebug(type, String(properties.sessionID ?? ""))
-          appendEventShape(type, properties)
+          if (!/delta/.test(type)) appendEventShape(type, event)
 
           // OpenCode 2.x event names (observed on desktop builds).
           if (type === "session.step.ended") {
