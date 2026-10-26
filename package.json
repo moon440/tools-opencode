@@ -1,0 +1,15 @@
+{
+  "name": "tools-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AGPL OpenCode 2.x token, cache, and security plugins.",
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "opencode",
+    "token",
+    "cache",
+    "context-mode",
+    "hyper"
+  ]
+}

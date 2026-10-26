@@ -1,0 +1,167 @@
+{
+  // OpenCode 2.x example for Charm Hyper.
+  // Copy only the settings you want. Preserve unrelated user configuration.
+  "$schema": "https://opencode.ai/config.json",
+  "model": "hyper/qwen3.8-flash",
+  "default_agent": "build",
+  "tool_output": {
+    "max_lines": 300,
+    "max_bytes": 20000
+  },
+  "compaction": {
+    "auto": true,
+    "keep": {
+      "tokens": 15000
+    },
+    "buffer": 20000
+  },
+  // Native fixed warming is disabled when using the cache-warden plugin.
+  "warming": false,
+  "providers": {
+    "hyper": {
+      "settings": {
+        // Helps OpenAI-compatible cache routing keep related session requests
+        // on the same backend when supported by the provider.
+        "setCacheKey": true
+      }
+    }
+  },
+  "permissions": [
+    {
+      "action": "webfetch",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "curl *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "curl.exe *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "wget *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "wget.exe *",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.ssh/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.ssh/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.aws/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.aws/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.azure/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.azure/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.config/gh/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.config/gh/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.config/opencode/service.json",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.config/opencode/service.json",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.local/share/opencode/opencode.db",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.local/share/opencode/opencode.db",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/.local/share/opencode/log/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/.local/share/opencode/log/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/AppData/Local/Google/Chrome/User Data/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/AppData/Local/Google/Chrome/User Data/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "~/AppData/Roaming/Microsoft/Credentials/*",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "~/AppData/Roaming/Microsoft/Credentials/*",
+      "effect": "deny"
+    }
+  ],
+  "policies": [
+    {
+      "action": "tool.use",
+      "resource": "webfetch:*",
+      "effect": "deny"
+    }
+  ],
+  "mcp": {
+    "servers": {
+      // Add Context Mode, or another MCP server, using your local install paths.
+      // Do not commit personal absolute paths or credentials to a public repo.
+      //
+      // "context-mode": {
+      //   "type": "local",
+      //   "command": ["context-mode"],
+      //   "environment": {
+      //     "CONTEXT_MODE_PLATFORM": "opencode"
+      //   }
+      // }
+    }
+  }
+}
