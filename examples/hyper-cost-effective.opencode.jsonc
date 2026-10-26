@@ -38,7 +38,7 @@
     },
     "buffer": 20000
   },
-  // Native fixed warming is disabled when using the cache-warden plugin.
+  // Native fixed warming is disabled when using the opencode-cost-suite warden.
   "warming": false,
   "providers": {
     "hyper": {

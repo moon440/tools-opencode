@@ -10,15 +10,14 @@ AGPL-3.0-only.
 ```text
 plugins/
   context-mode-safe-router.ts
-  openslimedit.ts
-  cost-guard.ts
-  cache-warden.ts
-  rea-toggle.ts
+  opencode-cost-suite.ts
 examples/
   hyper-cost-effective.opencode.jsonc
 docs/
   COST_MODEL.md
   SECURITY.md
+tests/
+  verify.mjs
 ```
 
 ## Design rules
@@ -62,62 +61,74 @@ ctx_index
 ctx_search
 ```
 
-### `openslimedit`
+### `opencode-cost-suite`
 
-Shortens stable built-in tool descriptions. Tool names and schemas remain
-unchanged.
+One plugin replacing `openslimedit`, `cost-guard`, `cache-warden`, and
+`rea-toggle`.
 
-### `cost-guard`
+Slim tool descriptions:
 
-Persistent slash commands:
+Shortens stable built-in tool descriptions. Tool names and schemas of kept
+tools remain unchanged, so the request prefix stays identical between chats.
 
-```text
-/cost status
-/cost warm on|off
-/cost mcp <server> on|off
-/cost compact
-```
+Fixed-prefix pruning:
 
-It edits global OpenCode config only when explicitly requested.
-
-### `cache-warden`
-
-Adaptive prompt-cache warmer.
-
-Default behavior:
+Removes diagnostic tool schemas that cost input tokens in every new session
+and every cache miss:
 
 ```text
-enabled
-minimum previous cache read: 30,000 tokens
-first warm ping: 4 minutes after idle
-ping interval: 4 minutes
-maximum pings: 4
-idle window: 20 minutes
+browser.trace.*  browser.cpu.*  browser.heap.*
+browser.network.*  browser.files.*  browser.lighthouse
+ctx_insight  ctx_doctor  ctx_upgrade  ctx_stats  ctx_purge
 ```
 
-It listens to OpenCode events and only warms a session when the previous real
-assistant request had a large cached prefix. It skips tiny sessions, subagents,
-and sessions that become busy.
+Browser core tools (preview, tabs, navigate, screenshot, clicks, evaluate)
+stay enabled for the Review tab workflow. Pruning happens inside the tool
+transform, so newly connected MCP servers are pruned on registry replay with
+no config churn.
+
+Limitation: desktop client-side tool namespaces (browser, IRC integrations)
+are not registered in the server tool registry and cannot be pruned by
+plugins. They appear in the Code Mode tool index with signatures, not full
+schemas. Measure their real prefix cost with `/cost task` in a fresh chat
+before attempting any workaround.
+
+Telemetry:
+
+Every assistant step appends a numeric line (tokens, cache read, cost, model)
+to `~/.local/share/opencode/cost-suite/usage.jsonl`. No prompts, no file
+contents, no session titles.
 
 Commands:
 
 ```text
-/warden status
-/warden on
-/warden off
+/cost status            config, MCP, warden arming, evidence
+/cost task              this session: steps, input, cache read, cost, largest step
+/cost report            top sessions by cost from the usage log
+/cost warm on|off       native warming in global config
+/cost mcp <name> on|off
+/cost compact
+/warden status|on|off|reset
+/rea on|off
 ```
 
-### `rea-toggle`
+Adaptive cache warden:
 
-Adds:
+Warms only after real idle, only when the last real assistant request had at
+least 30,000 cache-read tokens, at 4/8/12/16 minutes, max four pings, 20
+minute window, skipping subagents.
+
+Evidence-driven arming. Idle resumes are classified as
+`hit-unwarmed`, `hit-warmed`, `miss-warmed`, or `miss-unwarmed` in
+`warden.json`:
 
 ```text
-/rea on
-/rea off
+3+ idle resumes all hit the cache   -> warming disarms (stable, stop paying)
+2+ warmed misses, no warmed hit     -> warming disarms (ineffective)
+any observed miss                   -> warming arms
+/warden on|off                      -> manual override
+/warden reset                       -> forget evidence
 ```
-
-Useful for keeping a heavy reverse-engineering MCP server out of normal
-sessions.
 
 ## Install
 

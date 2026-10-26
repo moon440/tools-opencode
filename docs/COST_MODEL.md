@@ -139,3 +139,31 @@ quality matters.
 
 Cache-read value matters in long sessions. Qwen flash currently has one of the
 best cache-read prices in the Hyper catalog.
+
+## Input-first program (2026-10-26)
+
+Goal: minimize total cost = input + output + cache read. Focus on input: a new
+chat pays full uncached input for the whole fixed prefix, and input is about
+9.4x the cache-read price for qwen3.8-flash (`.15/M` vs `.016/M`).
+
+Four orders, ranked by savings:
+
+1. Shrink the fixed prefix. First request of a new chat costs
+   `prefix_tokens x .15 / 1M`. Prune diagnostic tool schemas, hide unused
+   skills (`disable-model-invocation: true`), trim AGENTS.md, keep slim tool
+   descriptions, one provider, one default model, minimal agent profiles.
+2. Kill cache misses. A miss re-bills the whole prefix as input. Never mutate
+   the system prompt, never toggle MCP or plugins during active work, make
+   schema changes once then freeze, keep model variants stable, keep
+   `setCacheKey: true`. Warden pings stay cheap insurance: about 4 pings
+   cost less than one miss at 300k.
+3. Keep each turn's new input small. Batch Context Mode operations
+   (`ctx_batch_execute`), keep tool_output caps, terse replies, never paste
+   logs or JSON into chat, attach images only when required.
+4. Control session shape. New task means new session, compact after a major
+   phase, start a fresh session past roughly 250k prefix, do not keep a huge
+   audit session alive for routine edits.
+
+Measurement plan: probe a fresh chat, record the first-request input tokens as
+the fixed-prefix size, compute `prefix x .15/M`, prune, re-probe, and diff.
+Log per task: first-request input, total input, cache read, misses.
