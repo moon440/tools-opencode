@@ -564,6 +564,7 @@ export default {
       const messageID = String(snap.id ?? "")
       if (messageID && item.flushed.has(messageID)) return
       if (messageID) item.flushed.add(messageID)
+      if (item.flushed.size > 1000) item.flushed.clear()
       item.pending.delete(messageID)
 
       const cacheRead = Number(snap.cacheRead ?? 0)
@@ -625,10 +626,31 @@ export default {
       return cur
     }
 
-    function firstNumber(obj: any, paths: string[][]): number | undefined {
-      for (const p of paths) {
-        const v = getPath(obj, p)
+    // v2 session events carry the payload under event.data
+    function eventValue(event: any, ...keys: string[]): any {
+      if (event?.data !== null && typeof event?.data === "object") {
+        let cur = event.data
+        for (const key of keys) {
+          if (cur === null || typeof cur !== "object") return undefined
+          cur = cur[key]
+        }
+        return cur
+      }
+      return undefined
+    }
+
+    function eventNumber(event: any, ...keyPaths: string[][]): number | undefined {
+      for (const keys of keyPaths) {
+        const v = eventValue(event, ...keys)
         if (typeof v === "number") return v
+      }
+      return undefined
+    }
+
+    function eventString(event: any, ...keyPaths: string[][]): string | undefined {
+      for (const keys of keyPaths) {
+        const v = eventValue(event, ...keys)
+        if (typeof v === "string") return v
       }
       return undefined
     }
@@ -642,35 +664,37 @@ export default {
     }
 
     const SESSION_ID_PATHS = [["sessionID"], ["session", "id"], ["info", "sessionID"], ["value", "sessionID"]]
-    const CACHE_READ_PATHS = [["tokens", "cache", "read"], ["usage", "tokens", "cache", "read"], ["info", "tokens", "cache", "read"], ["tokens", "cacheRead"], ["step", "tokens", "cache", "read"]]
-    const STEP_INPUT_PATHS = [["tokens", "input"], ["usage", "tokens", "input"], ["info", "tokens", "input"], ["step", "tokens", "input"]]
-    const STEP_OUTPUT_PATHS = [["tokens", "output"], ["usage", "tokens", "output"], ["info", "tokens", "output"], ["step", "tokens", "output"]]
-    const STEP_REASONING_PATHS = [["tokens", "reasoning"], ["usage", "tokens", "reasoning"], ["info", "tokens", "reasoning"], ["step", "tokens", "reasoning"]]
-    const STEP_COST_PATHS = [["cost"], ["usage", "cost"], ["info", "cost"], ["step", "cost"]]
 
-    function handleV2Step(properties: any): boolean {
-      const sessionID = firstString(properties, SESSION_ID_PATHS)
-      const cacheRead = firstNumber(properties, CACHE_READ_PATHS)
+    function handleV2Step(event: any): boolean {
+      const sessionID = eventString(event, ["sessionID"])
+      const cacheRead = eventNumber(event, ["tokens", "cache", "read"], ["tokens", "cacheRead"])
       if (!sessionID || cacheRead === undefined) return false
+
+      const durable = event?.durable
+      const id = durable?.seq !== undefined ? `${durable.aggregateID ?? ""}:${durable.seq}` : ""
 
       const item = state(sessionID)
       flushAssistantStep(item, {
-        id: "",
+        id,
         sessionID,
-        providerID: firstString(properties, [["providerID"], ["model", "providerID"], ["info", "providerID"]]),
-        modelID: firstString(properties, [["modelID"], ["model", "id"], ["info", "modelID"]]),
-        input: firstNumber(properties, STEP_INPUT_PATHS) ?? 0,
-        output: firstNumber(properties, STEP_OUTPUT_PATHS) ?? 0,
-        reasoning: firstNumber(properties, STEP_REASONING_PATHS) ?? 0,
+        providerID: eventString(event, ["model", "providerID"]) ?? eventString(event, ["providerID"]),
+        modelID: eventString(event, ["model", "id"]) ?? eventString(event, ["modelID"]),
+        input: eventNumber(event, ["tokens", "input"]) ?? 0,
+        output: eventNumber(event, ["tokens", "output"]) ?? 0,
+        reasoning: eventNumber(event, ["tokens", "reasoning"]) ?? 0,
         cacheRead,
-        cacheWrite: 0,
-        cost: firstNumber(properties, STEP_COST_PATHS) ?? 0,
+        cacheWrite: eventNumber(event, ["tokens", "cache", "write"]) ?? 0,
+        cost: eventNumber(event, ["cost"]) ?? 0,
       })
+
+      // Idle-based warming: arm the timer after every real step. It only
+      // fires when the session stays quiet for IDLE_START_MS.
+      void scheduleWarm(sessionID, IDLE_START_MS)
       return true
     }
 
-    function handleV2User(properties: any) {
-      const sessionID = firstString(properties, SESSION_ID_PATHS)
+    function handleV2User(event: any) {
+      const sessionID = eventString(event, ["sessionID"]) ?? firstString(event?.properties ?? {}, SESSION_ID_PATHS)
       if (!sessionID) return
       const item = state(sessionID)
       const now = Date.now()
@@ -684,8 +708,8 @@ export default {
       }
     }
 
-    async function handleV2Idle(properties: any) {
-      const sessionID = firstString(properties, SESSION_ID_PATHS)
+    async function handleV2Idle(event: any) {
+      const sessionID = eventString(event, ["sessionID"])
       if (!sessionID) return
 
       const item = state(sessionID)
@@ -717,31 +741,33 @@ export default {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
           const type = String(event?.type ?? "")
           const properties = event?.properties ?? {}
-          appendEventDebug(type, String(properties.sessionID ?? ""))
+          const eventSession = String(eventValue(event, "sessionID") ?? properties.sessionID ?? "")
+          appendEventDebug(type, eventSession)
           if (!/delta/.test(type)) appendEventShape(type, event)
 
-          // OpenCode 2.x event names (observed on desktop builds).
+          // OpenCode 2.x event names (verified against desktop build payloads).
           if (type === "session.step.ended") {
-            handleV2Step(properties)
+            handleV2Step(event)
             continue
           }
-          if (type === "session.idle") {
-            await handleV2Idle(properties)
+          if (type === "session.usage.updated") {
+            continue // cumulative totals; step lines already capture per-step data
+          }
+          if (type === "session.idle" || type === "session.status.idle") {
+            await handleV2Idle(event)
             continue
           }
           if (type === "session.status") {
-            const statusType = String(getPath(properties, ["status", "type"]) ?? getPath(properties, ["state", "type"]) ?? "")
-            const sessionID = firstString(properties, SESSION_ID_PATHS)
+            const statusType = String(getPath(properties, ["status", "type"]) ?? getPath(properties, ["state", "type"]) ?? eventValue(event, "status", "type") ?? "")
+            const sessionID = eventSession
             if (sessionID && (statusType === "busy" || statusType === "running")) {
               state(sessionID).attempts = 0
               cancel(sessionID)
             }
             continue
           }
-          if (/^session\.(prompt|input)\./.test(type) && !/delta|progress/.test(type)) {
-            if (type.includes("created") || type.includes("started") || type.includes("updated")) {
-              handleV2User(properties)
-            }
+          if (/^session\.(prompt|message|input)\./i.test(type) && !/delta|progress/.test(type)) {
+            handleV2User(event)
             continue
           }
 
