@@ -1,267 +1,99 @@
-# tools-opencode
+tools-opencode
+==============
 
-OpenCode 2.x plugins and templates for lowering token/cache cost while keeping
-agents capable.
+Two OpenCode 2.x plugins that keep the money questions out of your prompts.
 
-AGPL-3.0-only.
+    plugins/cost.ts     slim tool descriptions, prune junk schemas, per-step
+                        cost log, cache warmer with an evidence budget
+    plugins/router.ts   permission checks that block fat reads and raw web
+                        traffic; points the agent at Context Mode instead
 
-## What this repository contains
+Why: on OpenAI-compatible providers the request prefix gets prompt-cached.
+A new chat pays full input price for the whole stable prefix; a cache miss
+re-bills it. On qwen3.8-flash through Hyper that's $0.15 per million input
+tokens versus $0.016 cached, so shrinking the prefix and not breaking it is
+most of the game. docs/COSTS.md has the measured numbers and the math.
 
-```text
-plugins/
-  context-mode-safe-router.ts
-  opencode-cost-suite.ts
-examples/
-  hyper-cost-effective.opencode.jsonc
-docs/
-  COST_MODEL.md
-  SECURITY.md
-tests/
-  verify.mjs
-```
 
-## Design rules
+install
+-------
 
-These plugins do not mutate the system prompt.
+Copy both files into your global plugin dir:
 
-They avoid:
+    ~/.config/opencode/plugins/
 
-```text
-system.transform
-session context injection
-resume snapshot injection
-compaction prompt injection
-dynamic per-request prompt text
-```
+Restart OpenCode (desktop: quit and reopen; CLI: opencode service restart).
+No dependencies, no network, no build step. Two files, that's the whole
+runtime. Everything is plain OpenCode 2.x plugin API.
 
-This is important for OpenAI-compatible providers that use prefix caching. If
-the stable beginning of a request changes, the provider may bill the whole
-context as uncached input.
 
-## Plugins
+commands
+--------
 
-### `context-mode-safe-router`
+    /cost status            config, MCP state, warden arming + evidence
+    /cost task              this session: steps, tokens, cache, cost
+    /cost report            top sessions by cost from the usage log
+    /cost warm on|off       native warming (you usually want the warden)
+    /cost mcp <name> on|off config toggle; expect one cache miss
+    /cost compact           compact now
+    /warden status|on|off|reset
+    /rea on|off             heavy reverse-engineering MCP, off by default
 
-Blocks or redirects wasteful tool calls:
+Telemetry lands in ~/.local/share/opencode/cost-suite/ as numeric JSONL.
+Token counts and cents. No prompts, no file contents, no titles. Delete the
+directory whenever you like; nothing else reads it.
 
-```text
-raw webfetch
-curl / wget stdout
-large native file reads
-local credential paths
-```
 
-It does not disable Context Mode. It routes the agent toward:
+rules of the house
+------------------
 
-```text
-ctx_execute
-ctx_execute_file
-ctx_fetch_and_index
-ctx_index
-ctx_search
-```
+These plugins exist so that I stopped paying for my own habits. They hold
+to a few rules that you should keep too if you fork:
 
-### `opencode-cost-suite`
+1. The system prompt is never touched. No system.transform, no context
+   injection, nothing dynamic at the front of the request. Move the prefix
+   and the provider rebills all of it.
+2. Schema changes happen once, then freeze. Toggling an MCP server mid-work
+   costs a full prefix rebuild. /cost mcp says so before it does it.
+3. Warming must earn its keep. The warden classifies every idle resume as
+   hit/miss with/without pings (warden.json), warms only sessions whose last
+   real step had >= 30k cached tokens, and disarms itself when the cache
+   survives idle without help, or when pings demonstrably failed to save a
+   miss. Four pings (~$0.02) must beat one 300k miss (~$0.047) or they are
+   off. That ratio is provider-specific; tune it, don't trust my defaults.
+4. OpenCode is not a sandbox. The router stops the agent from doing stupid
+   things with credentials; a determined shell still runs as you. Don't
+   paste logs, opencode.db, or service.json into bug reports; docs/SECURITY.md
+   has the short list.
 
-One plugin replacing `openslimedit`, `cost-guard`, `cache-warden`, and
-`rea-toggle`.
 
-Slim tool descriptions:
+measured, not promised
+----------------------
 
-Shortens stable built-in tool descriptions. Tool names and schemas of kept
-tools remain unchanged, so the request prefix stays identical between chats.
+Real numbers from the desktop build, same day I wrote this:
 
-Fixed-prefix pruning:
+    fixed prefix after pruning:     ~25k tokens shorter than before
+    cached step at 150k prefix:     $0.0026-$0.0029
+    fresh small session step:       ~$0.0008
+    310k full cache miss:           $0.047
+    1 hypercredit:                  $0.05
 
-Removes diagnostic tool schemas that cost input tokens in every new session
-and every cache miss:
+The old v1 event names (message.updated, session.idle) never fire on this
+build. The first warden I wrote was dead code listening to them for days.
+cost.ts maps the real v2 payloads (session.step.ended, event.data) and
+dedups with durable sequence ids because the desktop runs one plugin
+instance per location and they all see one bus. If you port this to another
+host, re-run the event capture in tests first; build names lie.
 
-```text
-browser.trace.*  browser.cpu.*  browser.heap.*
-browser.network.*  browser.files.*  browser.lighthouse
-ctx_insight  ctx_doctor  ctx_upgrade  ctx_stats  ctx_purge
-```
 
-Browser core tools (preview, tabs, navigate, screenshot, clicks, evaluate)
-stay enabled for the Review tab workflow. Pruning happens inside the tool
-transform, so newly connected MCP servers are pruned on registry replay with
-no config churn.
+hacking
+-------
 
-Limitation: desktop client-side tool namespaces (browser, IRC integrations)
-are not registered in the server tool registry and cannot be pruned by
-plugins. They appear in the Code Mode tool index with signatures, not full
-schemas. Measure their real prefix cost with `/cost task` in a fresh chat
-before attempting any workaround.
+    node tests/verify.mjs
 
-Telemetry:
+loads the plugin, checks the prune patterns, the slim map, the warming
+economics rules, and greps shipped files for secrets and personal paths
+(that last one has caught me being sloppy twice).
 
-Every assistant step appends a numeric line (tokens, cache read, cost, model)
-to `~/.local/share/opencode/cost-suite/usage.jsonl`. No prompts, no file
-contents, no session titles.
-
-Commands:
-
-```text
-/cost status            config, MCP, warden arming, evidence
-/cost task              this session: steps, input, cache read, cost, largest step
-/cost report            top sessions by cost from the usage log
-/cost warm on|off       native warming in global config
-/cost mcp <name> on|off
-/cost compact
-/warden status|on|off|reset
-/rea on|off
-```
-
-Adaptive cache warden:
-
-Warms only after real idle, only when the last real assistant request had at
-least 30,000 cache-read tokens, at 4/8/12/16 minutes, max four pings, 20
-minute window, skipping subagents.
-
-Evidence-driven arming. Idle resumes are classified as
-`hit-unwarmed`, `hit-warmed`, `miss-warmed`, or `miss-unwarmed` in
-`warden.json`:
-
-```text
-3+ idle resumes all hit the cache   -> warming disarms (stable, stop paying)
-2+ warmed misses, no warmed hit     -> warming disarms (ineffective)
-any observed miss                   -> warming arms
-/warden on|off                      -> manual override
-/warden reset                       -> forget evidence
-```
-
-## Install
-
-Copy plugins into OpenCode's global plugin directory:
-
-```text
-~/.config/opencode/plugins/
-```
-
-or into a project:
-
-```text
-.opencode/plugins/
-```
-
-Restart or reload OpenCode:
-
-```sh
-opencode service restart
-```
-
-## Recommended Hyper model default
-
-Use:
-
-```text
-hyper/qwen3.8-flash
-```
-
-Current published pricing:
-
-```text
-input:       $0.15 / 1M
-output:      $0.47 / 1M
-cache read:  $0.016 / 1M
-cache write: $0 / 1M
-```
-
-Use `qwen3.8-27b` or another reasoning model only for hard tasks:
-
-```text
-hyper/qwen3.8-27b
-```
-
-Do not keep a very long stale session alive forever. Long sessions accumulate
-context and make every cached request expensive.
-
-Recommended agent variants:
-
-```text
-build:       hyper/qwen3.8-flash#medium
-plan:        hyper/qwen3.8-flash#medium
-general:     hyper/qwen3.8-flash#medium
-explore:     hyper/qwen3.8-flash#medium
-title:       hyper/qwen3.8-flash#low
-summary:     hyper/qwen3.8-flash#low
-compaction:  hyper/qwen3.8-flash#low
-```
-
-## Measured stable price target
-
-Isolated small new session:
-
-```text
-one status-check assistant step: $0.00084
-about 0.017 Hypercredits
-```
-
-For the tested `hyper/qwen3.8-flash #medium` setup, a stable cached session
-around 300k-330k context produced:
-
-```text
-median cached assistant request: $0.0053
-typical cached range:            $0.0045-$0.0060
-full 310k cache miss:            $0.047
-full 783k cache miss:            $0.118
-```
-
-In Hypercredits, assuming `1 credit = $0.05`:
-
-```text
-stable cached assistant request: about 0.10-0.12 credits
-310k miss:                       about 0.94 credits
-783k miss:                       about 2.36 credits
-```
-
-Do not confuse one assistant request with one user prompt. A user prompt can
-produce several assistant tool-loop steps.
-
-The practical stable target is:
-
-```text
-new small session step:         $0.0008-$0.0015
-normal cached work step:        $0.0025-$0.0050
-large audit session step:       $0.0045-$0.0060
-complex step with huge output:  $0.0060-$0.0100+
-cache-prefix rebuild:           context tokens * $0.15 / 1M
-```
-
-A full user task cost is:
-
-```text
-number of assistant/model steps * average step cost
-```
-
-## More documentation
-
-```text
-docs/COST_MODEL.md
-docs/AUDIT-2026-10-26.md
-docs/NOVELTY.md
-docs/SECURITY.md
-```
-
-When warming is enabled, one provider request is real usage. It should be used
-only when the previous context is large enough that a cache miss costs more
-than several warm requests.
-
-## Security notes
-
-See `docs/SECURITY.md`.
-
-Important:
-
-```text
-Do not include opencode.db
-Do not include opencode.db-wal
-Do not include service.json
-Do not include logs
-Do not run auth export and share its output
-Do not share pairing links
-Rotate any API key that appeared in chat or logs
-```
-
-OpenCode shell tools run with the local user's filesystem and network authority.
-Permission rules reduce agent mistakes but are not a full OS sandbox.
+Send patches the old way: a branch and a PR, or just fix your copy and
+don't tell anyone. No CLA, no process. AGPL-3.0-only, see LICENSE.

@@ -1,30 +1,14 @@
 /*
- * tools-opencode
- * Copyright (C) 2026 tools-opencode contributors
+ * router.ts -- makes the agent stop shoveling raw bytes into the prefix.
+ * Blocks fat reads, raw webfetch, and pokes at credential paths; points at
+ * the Context Mode tool instead.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, version 3.
-
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
-
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/agpl.txt>.
+ * Cache-safe on purpose: no system-prompt transform, no context injection,
+ * no tool-description mutation. Permission checks only. Read the denied
+ * message and you know which tool to reach for next.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
-
-// Context Mode routing adapter for OpenCode 2.x.
-//
-// Cache-safe design:
-// - no system-prompt transform
-// - no session/context/compaction hook
-// - no tool-description mutation
-// - permission evaluation only
-//
-// It blocks the tool calls most likely to add large raw data to the cached
-// conversation prefix, then tells the model which Context Mode tool to use.
 
 import { statSync } from "node:fs"
 import { homedir } from "node:os"
@@ -84,7 +68,7 @@ function isLargeRead(resource: string): boolean {
 }
 
 export default {
-  id: "context-mode-safe-router",
+  id: "router",
 
   async setup(ctx: any) {
     await ctx.permission.hook("evaluate", async (event: any) => {

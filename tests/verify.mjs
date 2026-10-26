@@ -1,21 +1,8 @@
-/*
- * tools-opencode
- * Copyright (C) 2026 tools-opencode contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, version 3.
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/agpl.txt>.
- */
-
-// Static verification for the cost suite. Run: node tests/verify.mjs
-// Checks: plugin loads, slim map intact, warden economics rules, and that no
-// personal paths or secrets appear in shipped files.
+// Static checks: load the plugin, verify prune patterns and the slim map,
+// run the warming economics rules, and grep shipped files for anything that
+// smells like a secret or a personal path. Run: node tests/verify.mjs
+//
+// SPDX-License-Identifier: AGPL-3.0-only
 
 import { readFileSync, readdirSync } from "node:fs"
 import { join, dirname } from "node:path"
@@ -33,8 +20,8 @@ function check(name, condition) {
   }
 }
 
-const suite = await import(pathToFileURL(join(root, "plugins", "opencode-cost-suite.ts")).href)
-check("cost suite plugin loads", suite.default?.id === "opencode-cost-suite")
+const suite = await import(pathToFileURL(join(root, "plugins", "cost.ts")).href)
+check("cost suite plugin loads", suite.default?.id === "cost")
 check("cost suite exports setup", typeof suite.default?.setup === "function")
 
 const slimKeys = Object.keys(suite.SLIM_DESCRIPTIONS)

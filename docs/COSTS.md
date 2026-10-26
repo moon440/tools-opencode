@@ -83,7 +83,7 @@ session should be replaced by a new session
 
 ## Adaptive cache warden
 
-The cache-warden plugin uses this heuristic:
+The warden in cost.ts uses this heuristic:
 
 ```text
 warm only after an idle agent loop

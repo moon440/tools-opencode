@@ -1,16 +1,10 @@
 /*
- * tools-opencode
- * Copyright (C) 2026 tools-opencode contributors
+ * cost.ts -- where the boring money questions live. One plugin for
+ * OpenCode 2.x: slim tool descriptions, prune schemas nobody uses, a step
+ * cost log you can actually read, and a cache warmer that has to prove it
+ * pays for itself before it pings.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, version 3.
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/agpl.txt>.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 // OpenCode 2.x cost suite: slim tool descriptions, cost commands, task
@@ -28,12 +22,14 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, appendF
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-// ---------------------------------------------------------------- constants
+// -- constants
 
 const IDLE_START_MS = 4 * 60_000
 const WARM_INTERVAL_MS = 4 * 60_000
 const IDLE_WINDOW_MS = 20 * 60_000
 const MAX_ATTEMPTS = 4
+// TODO: 30k floor is tuned for hyper + qwen3.8-flash pricing. Cheaper input
+// means a lower floor. Re-measure per provider; do not cargo-cult it.
 const MIN_CACHED_TOKENS = 30_000
 const WARM_PROMPT = "Do not perform any work. Reply with exactly: OK"
 const HYPERCREDIT_USD = 0.05
@@ -76,7 +72,7 @@ function shouldRemove(id: string): boolean {
   return REMOVE_ID_PATTERNS.some((pattern) => pattern.test(normalized))
 }
 
-// ------------------------------------------------------------------- paths
+// -- paths
 
 function configDirectory(): string {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode")
@@ -113,7 +109,7 @@ function ensureStateDir(): void {
   mkdirSync(stateDirectory(), { recursive: true })
 }
 
-// ------------------------------------------------------------- config edit
+// -- config edit
 
 function cleanJsonc(text: string): string {
   let output = ""
@@ -188,7 +184,7 @@ function truthy(value: string): boolean | null {
   return null
 }
 
-// -------------------------------------------------------- warden economics
+// -- warden economics
 
 // Outcome kinds, recorded on the first real assistant step after an idle gap
 // of at least IDLE_START_MS:
@@ -255,7 +251,7 @@ function warmWorthwhile(e: Economics): boolean {
   return economicsAllows(e)
 }
 
-// ----------------------------------------------------------------- helpers
+// -- helpers
 
 function unwrap(result: any): any {
   if (result && typeof result === "object" && "data" in result) return result.data
@@ -339,9 +335,9 @@ function aggregateSteps(entries: any[]): StepAggregate {
 }
 
 export default {
-  id: "opencode-cost-suite",
+  id: "cost",
   async setup(ctx: any) {
-    // ---------------------------------------------- slim tool descriptions
+    // -- slim tool descriptions
 
     await ctx.tool.transform((editor: any) => {
       const report = { at: Date.now(), removed: [], errors: [], registered: editor.list().map((tool: any) => String(tool?.id ?? "")) }
@@ -373,7 +369,7 @@ export default {
       }
     })
 
-    // ------------------------------------------------- session runtime state
+    // -- session runtime state
 
     type SessionState = {
       sessionID: string
@@ -504,7 +500,7 @@ export default {
       }
     }
 
-    // ------------------------------------------------------------- warming
+    // -- warming
 
     async function scheduleWarm(sessionID: string, delay: number) {
       const item = state(sessionID)
@@ -536,9 +532,9 @@ export default {
 
       const econ = readEconomics()
 
-      // Cross-instance debounce: several plugin instances (one per desktop
-      // location) share the event stream. Skip if another instance pinged
-      // within the last 90 seconds.
+      // The desktop runs one plugin instance per location and they all see the
+      // same event bus. Yes, all of them. Debounce through the shared
+      // warden.json so one warm ping costs once, not three times.
       if (econ.lastPingAt && Date.now() - econ.lastPingAt < 90_000) {
         item.warming = false
         if (eligible(item)) scheduleWarm(sessionID, WARM_INTERVAL_MS)
@@ -560,7 +556,7 @@ export default {
       }
     }
 
-    // -------------------------------------------- idle-resume classification
+    // -- idle-resume classification
 
     function recordResumeOutcome(item: SessionState, cacheRead: number, durableID: string) {
       if (!item.lastRealAt) return // first observed step, not a resume
@@ -584,7 +580,7 @@ export default {
       writeEconomics(econ)
     }
 
-    // -------------------------------------------------------- step telemetry
+    // -- step telemetry
 
     function flushAssistantStep(item: SessionState, snap: any) {
       const messageID = String(snap.id ?? "")
@@ -642,7 +638,7 @@ export default {
       }
     }
 
-    // ----------------------------------------------------- v2 event mapping
+    // -- v2 event mapping
 
     function getPath(obj: any, path: string[]): any {
       let cur = obj
@@ -759,7 +755,7 @@ export default {
       }
     }
 
-    // --------------------------------------------------------------- events
+    // -- events
 
     const controller = new AbortController()
 
@@ -889,7 +885,7 @@ export default {
       }
     })()
 
-    // ------------------------------------------------------------- commands
+    // -- commands
 
     async function reply(sessionID: string, text: string) {
       await ctx.session.prompt({ sessionID, text, delivery: "queue" })
