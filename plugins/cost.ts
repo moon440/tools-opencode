@@ -530,6 +530,7 @@ export default {
 
       item.warming = true
       item.attempts += 1
+      item.pingsSinceReal += 1
       item.lastWarmAt = Date.now()
 
       const econ = readEconomics()
@@ -1001,11 +1002,20 @@ export default {
         return
       }
 
-      // Task boundaries are user-message markers. Current task = after last marker.
-      const lastMarker = entries.filter((x) => x?.t === "task").pop()
-      const current = entries.filter((x) => x?.t === "step" && (!lastMarker || (x.ts ?? 0) >= (lastMarker.ts ?? 0)))
+      // Task boundaries: a user-message marker when the build emits prompt
+      // events, otherwise a step gap of 4+ minutes. Current task = steps
+      // since the last boundary.
+      const markers = entries.filter((x) => x?.t === "task")
+      const stepsOnly = entries.filter((x) => x?.t === "step")
+      let boundary = markers.length ? markers[markers.length - 1].ts : 0
+      for (let idx = 1; idx < stepsOnly.length; idx += 1) {
+        if ((stepsOnly[idx].ts ?? 0) - (stepsOnly[idx - 1].ts ?? 0) >= 4 * 60_000) {
+          boundary = Math.max(boundary, stepsOnly[idx].ts ?? 0)
+        }
+      }
+      const current = stepsOnly.filter((x) => (x.ts ?? 0) >= boundary && boundary > 0)
       const whole = aggregateSteps(entries)
-      const task = aggregateSteps(current)
+      const task = current.length ? aggregateSteps(current) : whole
       const pings = entries.filter((x) => x?.t === "warm").length
 
       const stepEntries = entries.filter((x) => x?.t === "step")
