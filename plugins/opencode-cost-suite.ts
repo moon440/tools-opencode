@@ -202,6 +202,7 @@ type Economics = {
   override: "auto" | "on" | "off"
   outcomes: Outcome[]
   pings: number
+  lastPingAt?: number
 }
 
 function defaultEconomics(): Economics {
@@ -215,6 +216,7 @@ function readEconomics(): Economics {
       override: raw?.override === "on" || raw?.override === "off" ? raw.override : "auto",
       outcomes: Array.isArray(raw?.outcomes) ? raw.outcomes.slice(-20) : [],
       pings: Number(raw?.pings ?? 0),
+      lastPingAt: typeof raw?.lastPingAt === "number" ? raw.lastPingAt : undefined,
     }
   } catch {
     return defaultEconomics()
@@ -314,8 +316,16 @@ function readUsageTail(lines: number): any[] {
 
 function aggregateSteps(entries: any[]): StepAggregate {
   const total = emptyAggregate()
+  const seen = new Set<string>()
   for (const entry of entries) {
     if (entry?.t !== "step") continue
+    // Multiple plugin instances (one per desktop location) append the same
+    // durable step. The k field is the aggregate:seq dedup key.
+    const key = String(entry.k ?? "")
+    if (key) {
+      if (seen.has(key)) continue
+      seen.add(key)
+    }
     total.steps += 1
     total.input += Number(entry.i ?? 0)
     total.output += Number(entry.o ?? 0)
@@ -525,7 +535,18 @@ export default {
       item.lastWarmAt = Date.now()
 
       const econ = readEconomics()
+
+      // Cross-instance debounce: several plugin instances (one per desktop
+      // location) share the event stream. Skip if another instance pinged
+      // within the last 90 seconds.
+      if (econ.lastPingAt && Date.now() - econ.lastPingAt < 90_000) {
+        item.warming = false
+        if (eligible(item)) scheduleWarm(sessionID, WARM_INTERVAL_MS)
+        return
+      }
+
       econ.pings += 1
+      econ.lastPingAt = Date.now()
       writeEconomics(econ)
       appendUsage({ t: "warm", s: sessionID, n: item.attempts, ts: Date.now() })
 
@@ -585,9 +606,10 @@ export default {
 
       appendUsage({
         t: "step",
+        k: snap.id || "",
         s: item.sessionID,
-        p: snap.providerID ?? "",
-        m: snap.modelID ?? "",
+        p: snap.providerID ?? item.providerID ?? "",
+        m: snap.modelID ?? item.modelID ?? "",
         i: snap.input,
         o: snap.output,
         r: snap.reasoning,
@@ -746,6 +768,17 @@ export default {
           if (!/delta/.test(type)) appendEventShape(type, event)
 
           // OpenCode 2.x event names (verified against desktop build payloads).
+          if (type === "session.step.started") {
+            const sessionID = eventSession
+            if (sessionID) {
+              const item = state(sessionID)
+              const modelID = eventString(event, ["model", "id"])
+              const variant = eventString(event, ["model", "variant"])
+              item.providerID = eventString(event, ["model", "providerID"]) ?? item.providerID
+              item.modelID = modelID ? (variant ? `${modelID}#${variant}` : modelID) : item.modelID
+            }
+            continue
+          }
           if (type === "session.step.ended") {
             handleV2Step(event)
             continue
@@ -978,6 +1011,7 @@ export default {
     async function costReport(sessionID: string) {
       const entries = readUsageTail(4000)
       const bySession = new Map<string, StepAggregate>()
+      const linesFor = new Map<string, any[]>()
       let warmPings = 0
       for (const entry of entries) {
         if (entry?.t === "warm") {
@@ -986,16 +1020,11 @@ export default {
         }
         if (entry?.t !== "step") continue
         const key = String(entry.s ?? "")
-        if (!bySession.has(key)) bySession.set(key, emptyAggregate())
-        const agg = bySession.get(key)!
-        agg.steps += 1
-        agg.input += Number(entry.i ?? 0)
-        agg.output += Number(entry.o ?? 0)
-        agg.reasoning += Number(entry.r ?? 0)
-        agg.cacheRead += Number(entry.cr ?? 0)
-        agg.cacheWrite += Number(entry.cw ?? 0)
-        agg.cost += Number(entry.c ?? 0)
-        agg.maxCost = Math.max(agg.maxCost, Number(entry.c ?? 0))
+        if (!linesFor.has(key)) linesFor.set(key, [])
+        linesFor.get(key)!.push(entry)
+      }
+      for (const [key, lines] of linesFor) {
+        bySession.set(key, aggregateSteps(lines))
       }
 
       const ranked = [...bySession.entries()].sort((a, b) => b[1].cost - a[1].cost).slice(0, 8)
