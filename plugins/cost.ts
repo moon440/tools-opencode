@@ -386,6 +386,8 @@ export default {
       pending: Map<string, any>
       flushed: Set<string>
       lastTaskAt?: number
+      subChecked?: boolean
+      isSub?: boolean
     }
 
     const sessions = new Map<string, SessionState>()
@@ -560,6 +562,8 @@ export default {
 
     function recordResumeOutcome(item: SessionState, cacheRead: number, durableID: string) {
       if (!item.lastRealAt) return // first observed step, not a resume
+      if (item.isSub) return // title/summary/subagent sessions have their own
+      // tiny caches; their misses are not evidence about the real prefix
 
       const gap = Date.now() - item.lastRealAt
       if (gap < IDLE_START_MS) return // normal in-task step, not an idle resume
@@ -697,6 +701,17 @@ export default {
       const id = durable?.seq !== undefined ? `${durable.aggregateID ?? ""}:${durable.seq}` : ""
 
       const item = state(sessionID)
+
+      // One-shot: is this a subagent/helper session? Its cache behavior must
+      // not pollute the warming evidence for real sessions.
+      if (!item.subChecked) {
+        item.subChecked = true
+        ctx.session.get({ sessionID }).then((response: any) => {
+          const info = unwrap(response)
+          item.isSub = Boolean(info?.parentID) || Boolean(info?.time?.archived)
+        }).catch(() => {})
+      }
+
       flushAssistantStep(item, {
         id,
         sessionID,
