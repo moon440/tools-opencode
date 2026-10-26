@@ -379,6 +379,7 @@ export default {
       lastWarmAt: number
       pending: Map<string, any>
       flushed: Set<string>
+      lastTaskAt?: number
     }
 
     const sessions = new Map<string, SessionState>()
@@ -460,6 +461,36 @@ export default {
         appendFileSync(path, `${JSON.stringify({ t: type, s: sessionID ? sessionID.slice(0, 8) : "", ts: Date.now() })}\n`, "utf8")
       } catch {
         // Diagnostics must never break the session.
+      }
+    }
+
+    // Shape diagnostics: keys + primitive numbers only. Never logs text
+    // content. Records the first few events per type so handlers can be
+    // written against the real payload of a build. Cap 40 lines.
+    const shapeSeen = new Map<string, number>()
+    let shapeLines = 0
+    function summarize(value: any, depth: number): any {
+      if (value === null || typeof value === "number" || typeof value === "boolean") return value
+      if (typeof value === "string") return value.length
+      if (Array.isArray(value)) return { len: value.length, first: value.length ? summarize(value[0], depth + 1) : undefined }
+      if (typeof value === "object" && depth < 3) {
+        const out: Record<string, any> = {}
+        for (const key of Object.keys(value).slice(0, 24)) out[key] = summarize(value[key], depth + 1)
+        return out
+      }
+      return typeof value
+    }
+
+    function appendEventShape(type: string, properties: any): void {
+      try {
+        const seen = shapeSeen.get(type) ?? 0
+        if (seen >= 3 || shapeLines >= 40) return
+        shapeSeen.set(type, seen + 1)
+        shapeLines += 1
+        ensureStateDir()
+        appendFileSync(join(stateDirectory(), "events-shape.jsonl"), `${JSON.stringify({ t: type, p: summarize(properties, 0) })}\n`, "utf8")
+      } catch {
+        // Diagnostics only.
       }
     }
 
@@ -583,6 +614,100 @@ export default {
       }
     }
 
+    // ----------------------------------------------------- v2 event mapping
+
+    function getPath(obj: any, path: string[]): any {
+      let cur = obj
+      for (const key of path) {
+        if (cur === null || typeof cur !== "object") return undefined
+        cur = cur[key]
+      }
+      return cur
+    }
+
+    function firstNumber(obj: any, paths: string[][]): number | undefined {
+      for (const p of paths) {
+        const v = getPath(obj, p)
+        if (typeof v === "number") return v
+      }
+      return undefined
+    }
+
+    function firstString(obj: any, paths: string[][]): string | undefined {
+      for (const p of paths) {
+        const v = getPath(obj, p)
+        if (typeof v === "string") return v
+      }
+      return undefined
+    }
+
+    const SESSION_ID_PATHS = [["sessionID"], ["session", "id"], ["info", "sessionID"], ["value", "sessionID"]]
+    const CACHE_READ_PATHS = [["tokens", "cache", "read"], ["usage", "tokens", "cache", "read"], ["info", "tokens", "cache", "read"], ["tokens", "cacheRead"], ["step", "tokens", "cache", "read"]]
+    const STEP_INPUT_PATHS = [["tokens", "input"], ["usage", "tokens", "input"], ["info", "tokens", "input"], ["step", "tokens", "input"]]
+    const STEP_OUTPUT_PATHS = [["tokens", "output"], ["usage", "tokens", "output"], ["info", "tokens", "output"], ["step", "tokens", "output"]]
+    const STEP_REASONING_PATHS = [["tokens", "reasoning"], ["usage", "tokens", "reasoning"], ["info", "tokens", "reasoning"], ["step", "tokens", "reasoning"]]
+    const STEP_COST_PATHS = [["cost"], ["usage", "cost"], ["info", "cost"], ["step", "cost"]]
+
+    function handleV2Step(properties: any): boolean {
+      const sessionID = firstString(properties, SESSION_ID_PATHS)
+      const cacheRead = firstNumber(properties, CACHE_READ_PATHS)
+      if (!sessionID || cacheRead === undefined) return false
+
+      const item = state(sessionID)
+      flushAssistantStep(item, {
+        id: "",
+        sessionID,
+        providerID: firstString(properties, [["providerID"], ["model", "providerID"], ["info", "providerID"]]),
+        modelID: firstString(properties, [["modelID"], ["model", "id"], ["info", "modelID"]]),
+        input: firstNumber(properties, STEP_INPUT_PATHS) ?? 0,
+        output: firstNumber(properties, STEP_OUTPUT_PATHS) ?? 0,
+        reasoning: firstNumber(properties, STEP_REASONING_PATHS) ?? 0,
+        cacheRead,
+        cacheWrite: 0,
+        cost: firstNumber(properties, STEP_COST_PATHS) ?? 0,
+      })
+      return true
+    }
+
+    function handleV2User(properties: any) {
+      const sessionID = firstString(properties, SESSION_ID_PATHS)
+      if (!sessionID) return
+      const item = state(sessionID)
+      const now = Date.now()
+      item.lastRealAt = now
+      item.attempts = 0
+      cancel(sessionID)
+      // Deduplicate rapid prompt lifecycle events into one task marker.
+      if (now - (item.lastTaskAt ?? 0) > 30_000) {
+        item.lastTaskAt = now
+        appendUsage({ t: "task", s: sessionID, ts: now })
+      }
+    }
+
+    async function handleV2Idle(properties: any) {
+      const sessionID = firstString(properties, SESSION_ID_PATHS)
+      if (!sessionID) return
+
+      const item = state(sessionID)
+      for (const snap of [...item.pending.values()]) {
+        flushAssistantStep(item, snap)
+      }
+      item.lastRealAt = item.lastRealAt || Date.now()
+      item.attempts = 0
+
+      try {
+        const response = await ctx.session.get({ sessionID })
+        const info = unwrap(response)
+        if (!info?.parentID && !info?.time?.archived) {
+          item.providerID = info?.model?.providerID ?? item.providerID
+          item.modelID = info?.model?.id ?? item.modelID
+          await scheduleWarm(sessionID, IDLE_START_MS)
+        }
+      } catch {
+        // Session no longer exists or is unavailable.
+      }
+    }
+
     // --------------------------------------------------------------- events
 
     const controller = new AbortController()
@@ -593,6 +718,32 @@ export default {
           const type = String(event?.type ?? "")
           const properties = event?.properties ?? {}
           appendEventDebug(type, String(properties.sessionID ?? ""))
+          appendEventShape(type, properties)
+
+          // OpenCode 2.x event names (observed on desktop builds).
+          if (type === "session.step.ended") {
+            handleV2Step(properties)
+            continue
+          }
+          if (type === "session.idle") {
+            await handleV2Idle(properties)
+            continue
+          }
+          if (type === "session.status") {
+            const statusType = String(getPath(properties, ["status", "type"]) ?? getPath(properties, ["state", "type"]) ?? "")
+            const sessionID = firstString(properties, SESSION_ID_PATHS)
+            if (sessionID && (statusType === "busy" || statusType === "running")) {
+              state(sessionID).attempts = 0
+              cancel(sessionID)
+            }
+            continue
+          }
+          if (/^session\.(prompt|input)\./.test(type) && !/delta|progress/.test(type)) {
+            if (type.includes("created") || type.includes("started") || type.includes("updated")) {
+              handleV2User(properties)
+            }
+            continue
+          }
 
           if (type === "message.updated") {
             const message = properties.info ?? properties.message
@@ -600,10 +751,14 @@ export default {
             if (message?.role === "user") {
               const sessionID = String(message.sessionID)
               const item = state(sessionID)
-              item.lastRealAt = Date.now()
+              const now = Date.now()
+              item.lastRealAt = now
               item.attempts = 0
               cancel(sessionID)
-              appendUsage({ t: "task", s: sessionID, ts: Date.now() })
+              if (now - (item.lastTaskAt ?? 0) > 30_000) {
+                item.lastTaskAt = now
+                appendUsage({ t: "task", s: sessionID, ts: now })
+              }
               continue
             }
 
